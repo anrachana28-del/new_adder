@@ -171,13 +171,20 @@ app.post("/add-member", async (req, res) => {
 
     const acc = getAccount()
     if (!acc) {
-      return res.json({ status: "failed", reason: "No account" })
+      return res.json({ status: "failed", reason: "No account available" })
     }
 
     const client = await getClient(acc)
 
-    const group = await client.getEntity(targetGroup)
+    // ================= GROUP =================
+    let group
+    try {
+      group = await client.getEntity(targetGroup)
+    } catch {
+      return res.json({ status: "failed", reason: "Invalid group" })
+    }
 
+    // ================= USER =================
     let userEntity
 
     try {
@@ -200,10 +207,10 @@ app.post("/add-member", async (req, res) => {
         accountUsed: acc.phone
       })
 
-      return res.json({ status: "skipped" })
+      return res.json({ status: "skipped", reason: "user not found" })
     }
 
-    // CHECK EXIST
+    // ================= CHECK EXIST =================
     try {
       await client.getParticipant(group, userEntity)
 
@@ -211,14 +218,14 @@ app.post("/add-member", async (req, res) => {
         username,
         user_id,
         status: "skipped",
-        reason: "Already in group",
+        reason: "already in group",
         accountUsed: acc.phone
       })
 
-      return res.json({ status: "skipped" })
+      return res.json({ status: "skipped", reason: "already in group" })
     } catch {}
 
-    // INVITE
+    // ================= INVITE =================
     try {
       await client.invoke(
         new Api.channels.InviteToChannel({
@@ -233,9 +240,49 @@ app.post("/add-member", async (req, res) => {
       })
     }
 
-    acc.addCount++
+    // ================= WAIT FOR TELEGRAM SYNC =================
+    await sleep(15000)
 
-    await sleep(3000)
+    // ================= VERIFY JOIN =================
+    let joined = false
+
+    try {
+      await client.getParticipant(group, userEntity)
+      joined = true
+    } catch {}
+
+    // retry verify
+    if (!joined) {
+      for (let i = 0; i < 3; i++) {
+        await sleep(5000)
+
+        try {
+          await client.getParticipant(group, userEntity)
+          joined = true
+          break
+        } catch {}
+      }
+    }
+
+    // ================= FINAL RESULT =================
+    if (!joined) {
+      await saveHistory({
+        username,
+        user_id,
+        status: "failed",
+        reason: "invite sent but not joined",
+        accountUsed: acc.phone
+      })
+
+      return res.json({
+        status: "failed",
+        reason: "NOT CONFIRMED JOIN",
+        accountUsed: acc.phone
+      })
+    }
+
+    // ================= SUCCESS =================
+    acc.addCount++
 
     await saveHistory({
       username,
@@ -246,6 +293,7 @@ app.post("/add-member", async (req, res) => {
 
     return res.json({
       status: "success",
+      reason: "verified joined",
       accountUsed: acc.phone
     })
 
