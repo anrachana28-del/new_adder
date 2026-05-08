@@ -6,10 +6,10 @@ import { fileURLToPath } from 'url'
 import { createClient } from "redis"
 import admin from "firebase-admin"
 
-import { TelegramClient, Api } from "telegram"
+import { TelegramClient } from "telegram"
 import { StringSession } from "telegram/sessions/index.js"
+import { Api } from "telegram/tl/api.js"
 
-// ================= APP =================
 const app = express()
 app.use(express.json())
 
@@ -17,13 +17,12 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 // ================= REDIS =================
-const redis = createClient({
-  url: process.env.REDIS_URL
-})
+const redis = createClient({ url: process.env.REDIS_URL })
 
+redis.on("error", err => console.log("Redis Error:", err))
 await redis.connect()
 
-// ================= FIREBASE HISTORY =================
+// ================= FIREBASE =================
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)
 
 admin.initializeApp({
@@ -36,15 +35,19 @@ const db = admin.database()
 // ================= MEMORY =================
 const clients = {}
 const sessions = {}
+const accountLock = new Map()
 
 // ================= HELPERS =================
 const sleep = (ms) => new Promise(r => setTimeout(r, ms))
 
-function normalizeUsername(input) {
+function normalize(input) {
   if (!input) return null
-  let u = input.trim()
-  if (u.includes("t.me/")) u = u.split("/").pop()
-  return u.replace("@", "").trim()
+  let v = input.trim()
+
+  if (v.includes("t.me/")) v = v.split("t.me/")[1]
+  if (v.startsWith("@")) v = v.slice(1)
+
+  return v
 }
 
 // ================= ACCOUNTS =================
@@ -59,8 +62,8 @@ while (process.env[`TG_ACCOUNT_${i}_PHONE`]) {
     api_hash: process.env[`TG_ACCOUNT_${i}_API_HASH`],
     session: process.env[`TG_ACCOUNT_${i}_SESSION`],
     status: "active",
-    addCount: 0,
-    floodWaitUntil: null
+    floodWaitUntil: 0,
+    addCount: 0
   })
   i++
 }
@@ -73,7 +76,8 @@ function getAccount() {
 
   const available = accounts.filter(a =>
     a.status === "active" &&
-    (!a.floodWaitUntil || a.floodWaitUntil < now)
+    a.floodWaitUntil < now &&
+    !accountLock.get(a.id)
   )
 
   if (!available.length) return null
@@ -81,14 +85,18 @@ function getAccount() {
   const acc = available[index % available.length]
   index++
 
+  accountLock.set(acc.id, true)
   return acc
+}
+
+function unlockAccount(id) {
+  accountLock.delete(id)
 }
 
 // ================= SESSION =================
 async function loadSession(id) {
   if (sessions[id]) return sessions[id]
-  const r = await redis.get(`tg:session:${id}`)
-  return r
+  return await redis.get(`tg:session:${id}`)
 }
 
 async function saveSession(id, session) {
@@ -97,206 +105,88 @@ async function saveSession(id, session) {
 }
 
 // ================= CLIENT =================
-async function getClient(account) {
-  if (clients[account.id]) {
+async function getClient(acc) {
+
+  if (clients[acc.id]) {
     try {
-      await clients[account.id].getMe()
-      return clients[account.id]
+      await clients[acc.id].getMe()
+      return clients[acc.id]
     } catch {
-      delete clients[account.id]
+      delete clients[acc.id]
     }
   }
 
-  const session = await loadSession(account.id)
+  const session = await loadSession(acc.id)
 
   const client = new TelegramClient(
-    new StringSession(session || account.session),
-    account.api_id,
-    account.api_hash,
-    { connectionRetries: 5 }
+    new StringSession(session || acc.session),
+    acc.api_id,
+    acc.api_hash,
+    { connectionRetries: 3 }
   )
 
   await client.connect()
   await client.getMe()
 
   const newSession = client.session.save()
-  await saveSession(account.id, newSession)
+  await saveSession(acc.id, newSession)
 
-  clients[account.id] = client
+  clients[acc.id] = client
 
   return client
 }
 
 // ================= HISTORY =================
 async function saveHistory(data) {
-  await db.ref("history").push({
-    ...data,
-    timestamp: Date.now()
-  })
+  try {
+    await db.ref("history").push({
+      ...data,
+      timestamp: Date.now()
+    })
+  } catch (e) {
+    console.log("History error:", e.message)
+  }
 }
 
-// ================= ADD MEMBER (FIXED CORE) =================
-app.post("/add-member", async (req, res) => {
+// ================= GROUP MEMBERS =================
+async function getGroupMembers(client, group) {
+  try {
+    const result = await client.getParticipants(group, { limit: 200 })
+
+    return result
+      .filter(m => m.username)
+      .map(m => "@" + m.username)
+
+  } catch {
+    return []
+  }
+}
+
+// ================= GROUP INFO =================
+app.post("/group-info", async (req, res) => {
+
+  const acc = getAccount()
+  if (!acc) return res.json({ status: "failed" })
+
   try {
 
-    const { username, user_id, access_hash, targetGroup } = req.body
-
-    const acc = getAccount()
-    if (!acc) {
-      return res.json({ status: "failed", reason: "no account" })
-    }
+    const { targetGroup } = req.body
 
     const client = await getClient(acc)
+    const group = await client.getEntity(targetGroup)
 
-    let group
-    try {
-      group = await client.getEntity(targetGroup)
-    } catch {
-      return res.json({ status: "failed", reason: "invalid group" })
-    }
-
-    // ================= USER =================
-    let user
-
-    const clean = normalizeUsername(username)
-
-    try {
-      if (clean) {
-        user = await client.getEntity(clean)
-      } else {
-
-        // 🔥 FIX: safe BigInt conversion
-        user = new Api.InputUser({
-          userId: BigInt(user_id),
-          accessHash: BigInt(access_hash)
-        })
-      }
-    } catch {
-      await saveHistory({
-        username,
-        user_id,
-        status: "skipped",
-        reason: "user not found",
-        accountUsed: acc.phone
-      })
-
-      return res.json({
-        status: "skipped",
-        reason: "user not found"
-      })
-    }
-
-    // ================= INVITE =================
-    try {
-      await client.invoke(
-        new Api.channels.InviteToChannel({
-          channel: group,
-          users: [user]
-        })
-      )
-
-    } catch (err) {
-
-      const msg = err.message || ""
-
-      // ================= FLOOD WAIT =================
-      const flood = msg.match(/FLOOD_WAIT_(\d+)/)
-
-      if (flood) {
-        const wait = Number(flood[1])
-
-        acc.status = "floodwait"
-        acc.floodWaitUntil = Date.now() + wait * 1000
-
-        await saveHistory({
-          username,
-          user_id,
-          status: "floodwait",
-          reason: `FLOOD_WAIT_${wait}`,
-          accountUsed: acc.phone
-        })
-
-        return res.json({
-          status: "floodwait",
-          reason: `wait ${wait}s`
-        })
-      }
-
-      // ================= NORMAL FAILED =================
-      await saveHistory({
-        username,
-        user_id,
-        status: "failed",
-        reason: msg,
-        accountUsed: acc.phone
-      })
-
-      return res.json({
-        status: "failed",
-        reason: msg
-      })
-    }
-
-    // ================= SUCCESS PATH ONLY =================
-
-    // 🔥 delay ONLY success
-    await sleep(15000)
-
-    // ================= VERIFY JOIN =================
-    let joined = false
-
-    try {
-      await client.getParticipant(group, user)
-      joined = true
-    } catch {}
-
-    // retry check (safe confirm)
-    if (!joined) {
-      for (let i = 0; i < 3; i++) {
-        await sleep(5000)
-
-        try {
-          await client.getParticipant(group, user)
-          joined = true
-          break
-        } catch {}
-      }
-    }
-
-    // ================= FINAL CHECK =================
-    if (!joined) {
-
-      await saveHistory({
-        username,
-        user_id,
-        status: "failed",
-        reason: "not confirmed join",
-        accountUsed: acc.phone
-      })
-
-      return res.json({
-        status: "failed",
-        reason: "telegram did not confirm join"
-      })
-    }
-
-    // ================= SUCCESS =================
-    acc.addCount++
-
-    await saveHistory({
-      username,
-      user_id,
-      status: "success",
-      accountUsed: acc.phone
-    })
+    unlockAccount(acc.id)
 
     return res.json({
-      status: "success",
-      verified: true,
-      accountUsed: acc.phone
+      status: "ok",
+      title: group.title || "Unknown",
+      username: group.username || null,
+      id: group.id.toString(),
+      type: group.className || "group"
     })
 
   } catch (e) {
+    unlockAccount(acc.id)
 
     return res.json({
       status: "failed",
@@ -305,14 +195,178 @@ app.post("/add-member", async (req, res) => {
   }
 })
 
-// ================= API =================
+// ================= SINGLE ADD =================
+app.post("/add-member", async (req, res) => {
+
+  const acc = getAccount()
+  if (!acc) return res.json({ status: "no account" })
+
+  const { username, targetGroup } = req.body
+
+  try {
+
+    const client = await getClient(acc)
+
+    const user = normalize(username)
+    if (!user) {
+      unlockAccount(acc.id)
+      return res.json({ status: "skipped" })
+    }
+
+    const entity = await client.getEntity(user)
+    const group = await client.getEntity(targetGroup)
+
+    await client.invoke(
+      new Api.channels.InviteToChannel({
+        channel: group,
+        users: [entity]
+      })
+    )
+
+    await saveHistory({
+      username: user,
+      status: "success",
+      accountUsed: acc.phone
+    })
+
+    unlockAccount(acc.id)
+
+    return res.json({ status: "success" })
+
+  } catch (e) {
+
+    unlockAccount(acc.id)
+
+    return res.json({
+      status: "failed",
+      reason: e.message
+    })
+  }
+})
+
+// ================= BATCH SYSTEM =================
+app.post("/add-batch", async (req, res) => {
+
+  const { users = [], groupLink, targetGroup, startIndex = 0, type } = req.body
+
+  const acc = getAccount()
+  if (!acc) return res.json({ status: "no account" })
+
+  const client = await getClient(acc)
+
+  let list = []
+
+  try {
+
+    // GROUP MODE
+    if (type === "group" || groupLink) {
+
+      const group = await client.getEntity(groupLink)
+      list = await getGroupMembers(client, group)
+
+    } else {
+
+      // USER MODE
+      list = users
+    }
+
+    const results = []
+
+    for (let i = startIndex; i < list.length; i++) {
+
+      const user = normalize(list[i])
+      if (!user) continue
+
+      try {
+
+        const entity = await client.getEntity(user)
+        const group = await client.getEntity(targetGroup)
+
+        await client.invoke(
+          new Api.channels.InviteToChannel({
+            channel: group,
+            users: [entity]
+          })
+        )
+
+        results.push({
+          index: i,
+          user,
+          status: "success"
+        })
+
+        await saveHistory({
+          username: user,
+          status: "success",
+          accountUsed: acc.phone
+        })
+
+        await sleep(2000)
+
+      } catch {
+
+        results.push({
+          index: i,
+          user,
+          status: "failed"
+        })
+      }
+    }
+
+    unlockAccount(acc.id)
+
+    return res.json({
+      status: "done",
+      lastIndex: list.length,
+      results
+    })
+
+  } catch (e) {
+
+    unlockAccount(acc.id)
+
+    return res.json({
+      status: "error",
+      reason: e.message
+    })
+  }
+})
+
+// ================= STATUS =================
 app.get("/account-status", (req, res) => {
   res.json(accounts)
 })
 
+// ================= HISTORY =================
 app.get("/history", async (req, res) => {
   const snap = await db.ref("history").get()
   res.json(snap.val() || {})
+})
+
+// ================= EXPORT =================
+app.get("/export/history", async (req, res) => {
+
+  const snap = await db.ref("history").get()
+  const data = Object.values(snap.val() || {})
+
+  if (req.query.format === "csv") {
+    const { Parser } = await import("json2csv")
+    const parser = new Parser()
+    return res.attachment("history.csv").send(parser.parse(data))
+  }
+
+  res.json(data)
+})
+
+app.get("/export/accounts", async (req, res) => {
+
+  if (req.query.format === "csv") {
+    const { Parser } = await import("json2csv")
+    const parser = new Parser()
+    return res.attachment("accounts.csv").send(parser.parse(accounts))
+  }
+
+  res.json(accounts)
 })
 
 // ================= FRONTEND =================
@@ -323,18 +377,14 @@ app.get("/", (req, res) => {
 })
 
 // ================= CLEAN =================
-setInterval(async () => {
+setInterval(() => {
   for (const id in clients) {
-    try {
-      await clients[id].getMe()
-    } catch {
-      delete clients[id]
-    }
+    clients[id].getMe().catch(() => delete clients[id])
   }
 }, 300000)
 
 // ================= RUN =================
 const PORT = process.env.PORT || 3000
 app.listen(PORT, () => {
-  console.log("🚀 RUNNING " + PORT)
+  console.log("RUNNING ON " + PORT)
 })
