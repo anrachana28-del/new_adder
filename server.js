@@ -23,7 +23,7 @@ const redis = createClient({
 
 await redis.connect()
 
-// ================= FIREBASE (HISTORY ONLY) =================
+// ================= FIREBASE HISTORY =================
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)
 
 admin.initializeApp({
@@ -47,28 +47,6 @@ function normalizeUsername(input) {
   return u.replace("@", "").trim()
 }
 
-// ================= SESSION =================
-async function loadSession(id) {
-  if (sessions[id]) return sessions[id]
-
-  const redisSession = await redis.get(`tg:session:${id}`)
-  if (redisSession) {
-    sessions[id] = redisSession
-    return redisSession
-  }
-
-  const acc = accounts.find(a => a.id === id)
-  return acc?.session || null
-}
-
-async function saveSession(id, session) {
-  sessions[id] = session
-
-  await redis.set(`tg:session:${id}`, session, {
-    EX: 60 * 60 * 24 * 30
-  })
-}
-
 // ================= ACCOUNTS =================
 const accounts = []
 
@@ -88,7 +66,7 @@ while (process.env[`TG_ACCOUNT_${i}_PHONE`]) {
 }
 
 // ================= ROTATION =================
-let lastIndex = 0
+let index = 0
 
 function getAccount() {
   const now = Date.now()
@@ -100,29 +78,39 @@ function getAccount() {
 
   if (!available.length) return null
 
-  const acc = available[lastIndex % available.length]
-  lastIndex++
+  const acc = available[index % available.length]
+  index++
 
   return acc
 }
 
-// ================= TELEGRAM CLIENT =================
+// ================= SESSION =================
+async function loadSession(id) {
+  if (sessions[id]) return sessions[id]
+  const r = await redis.get(`tg:session:${id}`)
+  return r
+}
+
+async function saveSession(id, session) {
+  sessions[id] = session
+  await redis.set(`tg:session:${id}`, session)
+}
+
+// ================= CLIENT =================
 async function getClient(account) {
-  try {
-    const cached = clients[account.id]
-    if (cached) {
-      await cached.getMe()
-      return cached
+  if (clients[account.id]) {
+    try {
+      await clients[account.id].getMe()
+      return clients[account.id]
+    } catch {
+      delete clients[account.id]
     }
-  } catch {
-    delete clients[account.id]
   }
 
-  const sessionString = await loadSession(account.id)
-  if (!sessionString) throw new Error("No session")
+  const session = await loadSession(account.id)
 
   const client = new TelegramClient(
-    new StringSession(sessionString),
+    new StringSession(session || account.session),
     account.api_id,
     account.api_hash,
     { connectionRetries: 5 }
@@ -141,63 +129,45 @@ async function getClient(account) {
 
 // ================= HISTORY =================
 async function saveHistory(data) {
-  try {
-    await db.ref("history").push({
-      ...data,
-      timestamp: Date.now()
-    })
-  } catch (e) {
-    console.log("History error:", e.message)
-  }
+  await db.ref("history").push({
+    ...data,
+    timestamp: Date.now()
+  })
 }
 
-// ================= AUTO JOIN =================
-async function autoJoin(client, group) {
-  try {
-    await client.getEntity(group)
-  } catch {
-    try {
-      await client.invoke(
-        new Api.messages.ImportChatInvite({ hash: group })
-      )
-    } catch {}
-  }
-}
-
-// ================= ADD MEMBER =================
+// ================= ADD MEMBER (FIXED CORE) =================
 app.post("/add-member", async (req, res) => {
   try {
+
     const { username, user_id, access_hash, targetGroup } = req.body
 
     const acc = getAccount()
     if (!acc) {
-      return res.json({ status: "failed", reason: "No account available" })
+      return res.json({ status: "failed", reason: "no account" })
     }
 
     const client = await getClient(acc)
 
-    // ================= GROUP =================
     let group
     try {
       group = await client.getEntity(targetGroup)
     } catch {
-      return res.json({
-        status: "failed",
-        reason: "Invalid group"
-      })
+      return res.json({ status: "failed", reason: "invalid group" })
     }
 
     // ================= USER =================
-    let userEntity
+    let user
+
+    const clean = normalizeUsername(username)
 
     try {
-      const clean = normalizeUsername(username)
-
       if (clean) {
-        userEntity = await client.getEntity(clean)
+        user = await client.getEntity(clean)
       } else {
-        userEntity = new Api.InputUser({
-          userId: user_id,
+
+        // 🔥 FIX: safe BigInt conversion
+        user = new Api.InputUser({
+          userId: BigInt(user_id),
           accessHash: BigInt(access_hash)
         })
       }
@@ -206,7 +176,7 @@ app.post("/add-member", async (req, res) => {
         username,
         user_id,
         status: "skipped",
-        reason: "User not found",
+        reason: "user not found",
         accountUsed: acc.phone
       })
 
@@ -216,38 +186,22 @@ app.post("/add-member", async (req, res) => {
       })
     }
 
-    // ================= CHECK EXIST =================
-    try {
-      await client.getParticipant(group, userEntity)
-
-      await saveHistory({
-        username,
-        user_id,
-        status: "skipped",
-        reason: "already in group",
-        accountUsed: acc.phone
-      })
-
-      return res.json({
-        status: "skipped",
-        reason: "already in group"
-      })
-    } catch {}
-
     // ================= INVITE =================
     try {
       await client.invoke(
         new Api.channels.InviteToChannel({
           channel: group,
-          users: [userEntity]
+          users: [user]
         })
       )
+
     } catch (err) {
 
       const msg = err.message || ""
 
-      // ❌ FLOOD WAIT
+      // ================= FLOOD WAIT =================
       const flood = msg.match(/FLOOD_WAIT_(\d+)/)
+
       if (flood) {
         const wait = Number(flood[1])
 
@@ -264,12 +218,11 @@ app.post("/add-member", async (req, res) => {
 
         return res.json({
           status: "floodwait",
-          reason: `FLOOD_WAIT_${wait}`,
-          accountUsed: acc.phone
+          reason: `wait ${wait}s`
         })
       }
 
-      // ❌ NORMAL ERROR (NO DELAY)
+      // ================= NORMAL FAILED =================
       await saveHistory({
         username,
         user_id,
@@ -284,33 +237,35 @@ app.post("/add-member", async (req, res) => {
       })
     }
 
-    // ================= ONLY SUCCESS GO HERE =================
+    // ================= SUCCESS PATH ONLY =================
 
-    // ⏱️ delay only success case
+    // 🔥 delay ONLY success
     await sleep(15000)
 
     // ================= VERIFY JOIN =================
     let joined = false
 
     try {
-      await client.getParticipant(group, userEntity)
+      await client.getParticipant(group, user)
       joined = true
     } catch {}
 
+    // retry check (safe confirm)
     if (!joined) {
       for (let i = 0; i < 3; i++) {
         await sleep(5000)
 
         try {
-          await client.getParticipant(group, userEntity)
+          await client.getParticipant(group, user)
           joined = true
           break
         } catch {}
       }
     }
 
-    // ================= FINAL RESULT =================
+    // ================= FINAL CHECK =================
     if (!joined) {
+
       await saveHistory({
         username,
         user_id,
@@ -321,8 +276,7 @@ app.post("/add-member", async (req, res) => {
 
       return res.json({
         status: "failed",
-        reason: "not joined (telegram rejected or pending)",
-        accountUsed: acc.phone
+        reason: "telegram did not confirm join"
       })
     }
 
@@ -338,11 +292,12 @@ app.post("/add-member", async (req, res) => {
 
     return res.json({
       status: "success",
-      reason: "verified joined",
+      verified: true,
       accountUsed: acc.phone
     })
 
   } catch (e) {
+
     return res.json({
       status: "failed",
       reason: e.message
@@ -350,18 +305,14 @@ app.post("/add-member", async (req, res) => {
   }
 })
 
-// ================= APIs =================
+// ================= API =================
 app.get("/account-status", (req, res) => {
   res.json(accounts)
 })
 
 app.get("/history", async (req, res) => {
-  try {
-    const snap = await db.ref("history").get()
-    res.json(snap.val() || {})
-  } catch {
-    res.json({})
-  }
+  const snap = await db.ref("history").get()
+  res.json(snap.val() || {})
 })
 
 // ================= FRONTEND =================
@@ -371,7 +322,7 @@ app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "index.html"))
 })
 
-// ================= CLEAN CLIENT =================
+// ================= CLEAN =================
 setInterval(async () => {
   for (const id in clients) {
     try {
@@ -380,10 +331,10 @@ setInterval(async () => {
       delete clients[id]
     }
   }
-}, 5 * 60 * 1000)
+}, 300000)
 
-// ================= SERVER =================
+// ================= RUN =================
 const PORT = process.env.PORT || 3000
 app.listen(PORT, () => {
-  console.log("🚀 Server running on " + PORT)
+  console.log("🚀 RUNNING " + PORT)
 })
