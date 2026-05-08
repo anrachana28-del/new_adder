@@ -1,0 +1,779 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Telegram PRO MAX</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono&display=swap" rel="stylesheet">
+
+<style>
+
+*{
+  margin:0;
+  padding:0;
+  box-sizing:border-box;
+}
+
+html,
+body{
+  width:100%;
+  height:100%;
+  overflow:hidden;
+  font-family:'JetBrains Mono', monospace;
+
+  background:
+  linear-gradient(
+    135deg,
+    #07111f,
+    #091d2d,
+    #10293b
+  );
+
+  color:#fff;
+}
+
+/* ================= APP ================= */
+
+.app{
+  width:100%;
+  height:100vh;
+
+  display:flex;
+}
+
+/* ================= SIDEBAR ================= */
+
+.sidebar{
+  width:260px;
+  height:100%;
+
+  background:
+  linear-gradient(
+    180deg,
+    #111827,
+    #0f172a
+  );
+
+  border-right:1px solid #1f2937;
+
+  padding:20px;
+
+  display:flex;
+  flex-direction:column;
+  gap:15px;
+}
+
+.logo{
+  font-size:24px;
+  font-weight:700;
+  color:#00ff88;
+
+  margin-bottom:20px;
+}
+
+.nav-btn{
+  width:100%;
+
+  padding:14px;
+
+  border:none;
+  border-radius:12px;
+
+  cursor:pointer;
+
+  background:#1e293b;
+  color:#fff;
+
+  transition:0.2s;
+
+  font-size:14px;
+  font-weight:700;
+}
+
+.nav-btn:hover{
+  transform:translateY(-2px);
+  background:#334155;
+}
+
+.nav-btn.active{
+  background:#00ff88;
+  color:#000;
+}
+
+/* ================= MAIN ================= */
+
+.main{
+  flex:1;
+  height:100vh;
+
+  overflow:auto;
+
+  padding:20px;
+}
+
+/* ================= PAGE ================= */
+
+.page{
+  display:none;
+}
+
+.page.active{
+  display:block;
+}
+
+/* ================= CARD ================= */
+
+.card{
+  width:100%;
+
+  background:
+  linear-gradient(
+    180deg,
+    rgba(20,20,20,0.95),
+    rgba(15,15,15,0.95)
+  );
+
+  border:1px solid #1f2937;
+
+  border-radius:20px;
+
+  padding:20px;
+
+  margin-bottom:20px;
+
+  box-shadow:
+  0 0 20px rgba(0,0,0,0.4);
+}
+
+.card-title{
+  font-size:22px;
+  font-weight:700;
+
+  color:#00ff88;
+
+  margin-bottom:15px;
+}
+
+/* ================= INPUT ================= */
+
+textarea,
+input{
+  width:100%;
+
+  background:#111827;
+
+  border:1px solid #1f2937;
+
+  color:#fff;
+
+  padding:14px;
+
+  border-radius:12px;
+
+  margin-top:10px;
+
+  font-size:14px;
+
+  outline:none;
+}
+
+textarea{
+  height:150px;
+  resize:none;
+}
+
+textarea:focus,
+input:focus{
+  border-color:#00ff88;
+}
+
+/* ================= BUTTON ================= */
+
+.primary-btn{
+  width:100%;
+
+  margin-top:15px;
+
+  padding:14px;
+
+  border:none;
+  border-radius:12px;
+
+  cursor:pointer;
+
+  font-size:15px;
+  font-weight:700;
+
+  color:#000;
+
+  background:
+  linear-gradient(
+    90deg,
+    #00ff88,
+    #00d9ff
+  );
+
+  transition:0.2s;
+}
+
+.primary-btn:hover{
+  transform:translateY(-2px);
+  opacity:0.9;
+}
+
+/* ================= STATUS ================= */
+
+.status-bar{
+  width:100%;
+
+  padding:15px;
+
+  border-radius:15px;
+
+  background:#111827;
+
+  margin-top:15px;
+
+  font-size:14px;
+  font-weight:700;
+
+  color:#00ff88;
+}
+
+/* ================= LOG ================= */
+
+.log-box{
+  width:100%;
+  height:300px;
+
+  overflow:auto;
+
+  background:#000;
+
+  border-radius:15px;
+
+  padding:15px;
+
+  margin-top:15px;
+
+  font-size:13px;
+
+  border:1px solid #1f2937;
+}
+
+.log-item{
+  margin-bottom:8px;
+}
+
+.success{
+  color:#00ff88;
+}
+
+.failed{
+  color:#ff4d4d;
+}
+
+.skipped{
+  color:orange;
+}
+
+/* ================= ACCOUNT ================= */
+
+.account-list{
+  display:grid;
+
+  grid-template-columns:
+  repeat(auto-fill,minmax(280px,1fr));
+
+  gap:15px;
+}
+
+.account-card{
+  background:#111827;
+
+  border:1px solid #1f2937;
+
+  border-radius:15px;
+
+  padding:15px;
+}
+
+.acc-phone{
+  font-size:18px;
+  font-weight:700;
+
+  margin-bottom:10px;
+}
+
+.acc-status{
+  font-size:14px;
+  font-weight:700;
+}
+
+.active-status{
+  color:#00ff88;
+}
+
+.flood-status{
+  color:orange;
+}
+
+.error-status{
+  color:red;
+}
+
+/* ================= HISTORY ================= */
+
+.history-table{
+  width:100%;
+
+  border-collapse:collapse;
+
+  margin-top:15px;
+}
+
+.history-table th,
+.history-table td{
+  padding:12px;
+
+  border:1px solid #1f2937;
+
+  text-align:left;
+
+  font-size:13px;
+}
+
+.history-table th{
+  background:#111827;
+  color:#00ff88;
+}
+
+.history-table tr{
+  background:#0f172a;
+}
+
+/* ================= MOBILE ================= */
+
+@media(max-width:900px){
+
+  .app{
+    flex-direction:column;
+  }
+
+  .sidebar{
+    width:100%;
+    height:auto;
+
+    flex-direction:row;
+
+    overflow:auto;
+  }
+
+  .main{
+    height:auto;
+  }
+
+  .nav-btn{
+    min-width:150px;
+  }
+
+  .account-list{
+    grid-template-columns:1fr;
+  }
+}
+
+</style>
+</head>
+
+<body>
+
+<div class="app">
+
+  <!-- ================= SIDEBAR ================= -->
+
+  <div class="sidebar">
+
+    <div class="logo">
+      Telegram PRO
+    </div>
+
+    <button
+      class="nav-btn active"
+      id="btnAdd"
+    >
+      Auto Add
+    </button>
+
+    <button
+      class="nav-btn"
+      id="btnAccounts"
+    >
+      Accounts
+    </button>
+
+    <button
+      class="nav-btn"
+      id="btnHistory"
+    >
+      History
+    </button>
+
+  </div>
+
+  <!-- ================= MAIN ================= -->
+
+  <div class="main">
+
+    <!-- ================= ADD PAGE ================= -->
+
+    <div
+      class="page active"
+      id="pageAdd"
+    >
+
+      <div class="card">
+
+        <div class="card-title">
+          Auto Add Members
+        </div>
+
+        <textarea
+          id="source"
+          placeholder="Enter usernames..."
+        ></textarea>
+
+        <input
+          id="target"
+          placeholder="Target group"
+        >
+
+        <button
+          class="primary-btn"
+          id="startBtn"
+        >
+          START ADD
+        </button>
+
+        <div
+          class="status-bar"
+          id="statusBar"
+        >
+          Ready
+        </div>
+
+      </div>
+
+      <div class="card">
+
+        <div class="card-title">
+          Logs
+        </div>
+
+        <div
+          class="log-box"
+          id="logBox"
+        ></div>
+
+      </div>
+
+    </div>
+
+    <!-- ================= ACCOUNTS PAGE ================= -->
+
+    <div
+      class="page"
+      id="pageAccounts"
+    >
+
+      <div class="card">
+
+        <div class="card-title">
+          Accounts
+        </div>
+
+        <div
+          class="account-list"
+          id="accountList"
+        ></div>
+
+      </div>
+
+    </div>
+
+    <!-- ================= HISTORY PAGE ================= -->
+
+    <div
+      class="page"
+      id="pageHistory"
+    >
+
+      <div class="card">
+
+        <div class="card-title">
+          History
+        </div>
+
+        <table class="history-table">
+
+          <thead>
+            <tr>
+              <th>User</th>
+              <th>Status</th>
+              <th>Reason</th>
+              <th>Account</th>
+            </tr>
+          </thead>
+
+          <tbody id="historyBody"></tbody>
+
+        </table>
+
+      </div>
+
+    </div>
+
+  </div>
+
+</div>
+
+<script>
+
+// ================= PAGES =================
+
+const pages = {
+  add: document.getElementById("pageAdd"),
+  accounts: document.getElementById("pageAccounts"),
+  history: document.getElementById("pageHistory")
+}
+
+function showPage(name){
+
+  Object.values(pages).forEach(p=>{
+    p.classList.remove("active")
+  })
+
+  pages[name].classList.add("active")
+
+  document.querySelectorAll(".nav-btn")
+  .forEach(b=>b.classList.remove("active"))
+
+  if(name==="add")
+    btnAdd.classList.add("active")
+
+  if(name==="accounts")
+    btnAccounts.classList.add("active")
+
+  if(name==="history")
+    btnHistory.classList.add("active")
+}
+
+btnAdd.onclick=()=>showPage("add")
+btnAccounts.onclick=()=>{
+  showPage("accounts")
+  loadAccounts()
+}
+btnHistory.onclick=()=>{
+  showPage("history")
+  loadHistory()
+}
+
+// ================= LOG =================
+
+const logBox =
+document.getElementById("logBox")
+
+function log(msg, cls=""){
+
+  const div =
+  document.createElement("div")
+
+  div.className =
+  `log-item ${cls}`
+
+  div.innerHTML = msg
+
+  logBox.appendChild(div)
+
+  logBox.scrollTop =
+  logBox.scrollHeight
+}
+
+// ================= START =================
+
+document
+.getElementById("startBtn")
+.onclick = async ()=>{
+
+  const source =
+  document.getElementById("source")
+  .value.trim()
+
+  const target =
+  document.getElementById("target")
+  .value.trim()
+
+  if(!source || !target){
+    alert("Missing data")
+    return
+  }
+
+  const users =
+  source.split("\n")
+  .map(v=>v.trim())
+  .filter(Boolean)
+
+  for(const u of users){
+
+    log(`🔄 Adding ${u}`)
+
+    try{
+
+      const res =
+      await fetch("/add-member",{
+        method:"POST",
+        headers:{
+          "Content-Type":"application/json"
+        },
+        body:JSON.stringify({
+          username:u,
+          targetGroup:target
+        })
+      })
+
+      const result =
+      await res.json()
+
+      log(
+        `✅ ${u} → ${result.status}`,
+        result.status
+      )
+
+    }catch(e){
+
+      log(
+        `❌ ${u} ERROR`,
+        "failed"
+      )
+    }
+  }
+}
+
+// ================= ACCOUNTS =================
+
+async function loadAccounts(){
+
+  const box =
+  document.getElementById("accountList")
+
+  box.innerHTML = ""
+
+  try{
+
+    const res =
+    await fetch("/account-status")
+
+    const data =
+    await res.json()
+
+    data.forEach(acc=>{
+
+      const div =
+      document.createElement("div")
+
+      div.className =
+      "account-card"
+
+      let cls = "active-status"
+
+      if(acc.status==="floodwait")
+        cls="flood-status"
+
+      if(acc.status==="error")
+        cls="error-status"
+
+      div.innerHTML = `
+        <div class="acc-phone">
+          📱 ${acc.phone}
+        </div>
+
+        <div class="acc-status ${cls}">
+          ${acc.status}
+        </div>
+
+        <br>
+
+        <div>
+          Add Count:
+          ${acc.addCount || 0}
+        </div>
+      `
+
+      box.appendChild(div)
+    })
+
+  }catch{
+
+    box.innerHTML =
+    "Load account error"
+  }
+}
+
+// ================= HISTORY =================
+
+async function loadHistory(){
+
+  const body =
+  document.getElementById("historyBody")
+
+  body.innerHTML = ""
+
+  try{
+
+    const res =
+    await fetch("/history")
+
+    const data =
+    await res.json()
+
+    Object.values(data)
+    .reverse()
+    .forEach(h=>{
+
+      const tr =
+      document.createElement("tr")
+
+      tr.innerHTML = `
+        <td>
+          ${h.username || h.user_id}
+        </td>
+
+        <td>
+          ${h.status}
+        </td>
+
+        <td>
+          ${h.reason || "-"}
+        </td>
+
+        <td>
+          ${h.accountUsed || "-"}
+        </td>
+      `
+
+      body.appendChild(tr)
+    })
+
+  }catch{
+
+    body.innerHTML =
+    "Load history error"
+  }
+}
+
+setInterval(loadAccounts,5000)
+
+</script>
+
+</body>
+</html>
