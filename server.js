@@ -181,7 +181,10 @@ app.post("/add-member", async (req, res) => {
     try {
       group = await client.getEntity(targetGroup)
     } catch {
-      return res.json({ status: "failed", reason: "Invalid group" })
+      return res.json({
+        status: "failed",
+        reason: "Invalid group"
+      })
     }
 
     // ================= USER =================
@@ -207,7 +210,10 @@ app.post("/add-member", async (req, res) => {
         accountUsed: acc.phone
       })
 
-      return res.json({ status: "skipped", reason: "user not found" })
+      return res.json({
+        status: "skipped",
+        reason: "user not found"
+      })
     }
 
     // ================= CHECK EXIST =================
@@ -222,7 +228,10 @@ app.post("/add-member", async (req, res) => {
         accountUsed: acc.phone
       })
 
-      return res.json({ status: "skipped", reason: "already in group" })
+      return res.json({
+        status: "skipped",
+        reason: "already in group"
+      })
     } catch {}
 
     // ================= INVITE =================
@@ -234,13 +243,50 @@ app.post("/add-member", async (req, res) => {
         })
       )
     } catch (err) {
+
+      const msg = err.message || ""
+
+      // ❌ FLOOD WAIT
+      const flood = msg.match(/FLOOD_WAIT_(\d+)/)
+      if (flood) {
+        const wait = Number(flood[1])
+
+        acc.status = "floodwait"
+        acc.floodWaitUntil = Date.now() + wait * 1000
+
+        await saveHistory({
+          username,
+          user_id,
+          status: "floodwait",
+          reason: `FLOOD_WAIT_${wait}`,
+          accountUsed: acc.phone
+        })
+
+        return res.json({
+          status: "floodwait",
+          reason: `FLOOD_WAIT_${wait}`,
+          accountUsed: acc.phone
+        })
+      }
+
+      // ❌ NORMAL ERROR (NO DELAY)
+      await saveHistory({
+        username,
+        user_id,
+        status: "failed",
+        reason: msg,
+        accountUsed: acc.phone
+      })
+
       return res.json({
         status: "failed",
-        reason: err.message
+        reason: msg
       })
     }
 
-    // ================= WAIT FOR TELEGRAM SYNC =================
+    // ================= ONLY SUCCESS GO HERE =================
+
+    // ⏱️ delay only success case
     await sleep(15000)
 
     // ================= VERIFY JOIN =================
@@ -251,7 +297,6 @@ app.post("/add-member", async (req, res) => {
       joined = true
     } catch {}
 
-    // retry verify
     if (!joined) {
       for (let i = 0; i < 3; i++) {
         await sleep(5000)
@@ -270,13 +315,13 @@ app.post("/add-member", async (req, res) => {
         username,
         user_id,
         status: "failed",
-        reason: "invite sent but not joined",
+        reason: "not confirmed join",
         accountUsed: acc.phone
       })
 
       return res.json({
         status: "failed",
-        reason: "NOT CONFIRMED JOIN",
+        reason: "not joined (telegram rejected or pending)",
         accountUsed: acc.phone
       })
     }
